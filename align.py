@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 from pathlib import Path
+import math
 import shutil
 from device_set import DeviceSet
 
@@ -25,12 +26,7 @@ parser.add_argument("--eng_emb_file")
 
 parser.add_argument("--nlm_preproc_dir", type=Path)
 parser.add_argument("--nlm_preprocess", action="store_true")
-
-
-# vecmap_dir = Path("~/vecmap").expanduser()
-# fasttext = Path("~/fastText/fasttext").expanduser()
-# nlm_dir = Path("~/multilingual-nlm").expanduser()
-# preproc_dir = Path("~/data/preproc").expanduser()
+parser.add_argument("--nlm_modified", action="store_true")
 
 def file_linecount(file_name):
     with open(file_name, "r") as f:
@@ -128,8 +124,11 @@ async def align_emb_vecmap(lang, device_set, opt):
 async def align_emb_fb(lang, device_set, opt):
     lang_align_dir = (opt.align_dir/lang)
     aligned_emb_file = lang_align_dir/f"{lang}.vec"
-    if aligned_emb_file.exists():
+    if aligned_emb_file.exists() and not opt.overwrite_align:
+        print(f"Skip aligning {lang} as already done")
         return
+
+    preproc_dir = opt.emb_dir
 
     lang_align_dir.mkdir(parents=True, exist_ok=True)
     preproc_dir.mkdir(parents=True, exist_ok=True)
@@ -172,7 +171,6 @@ async def align_emb_fb(lang, device_set, opt):
         f"--model_tgt {preproc_dir}/eng.vec "
         f"--output_src {lang_align_dir/lang}.vec "
         f"--output_tgt {lang_align_dir}/eng.vec "
-        f"--lexicon {lexicon_dir/lang_code}_eng.txt "
         f"--nepoch {n_epoch} "
         f"--bsz {batch_size} "
         f"--lr {learning_rate} "
@@ -200,14 +198,18 @@ async def align_emb_nlm(lang, device_set, opt):
     preproc_log_file = lang_align_dir/"logs_preproc.txt"
     align_log_file = lang_align_dir/"logs_align.txt"
 
-    if opt.preprocess:
-            # f"-save_dir {preproc_dir}/ "
+    if opt.nlm_preprocess:
+        if opt.nlm_modified:
+            preproc_dir_cmd_str = f"-save_dir {preproc_dir}/ "
+        else:
+            preproc_dir_cmd_str = ""
         p = await asyncio.create_subprocess_shell(
             f"python {opt.nlm_dir/'preprocess.py'} "
             f"-train {opt.bible_dir/lang}.txt {opt.bible_dir}/eng.txt "
             f"-V_min_freq {freq} 3 "
             f"-save_name {lang} "
             f"-output_vocab "
+            f"{preproc_dir_cmd_str}"
             f">> {preproc_log_file} 2>&1 "
         )
         await p.wait()
@@ -216,23 +218,30 @@ async def align_emb_nlm(lang, device_set, opt):
         print(f"Skip preprocessing {lang} as already done")
 
     device_id = await device_set.acquire_device()
-        # f"-data_dir {preproc_dir}/ "
+    if opt.nlm_modified:
+        opts_cmd_str = \
+        f"-data_dir {preproc_dir}/ "
+        f"-learning_rate 0.2 "
+        f"-stop_threshold 1.0 "
+    else:
+        opts_cmd_str = \
+        f"-learning_rate 1.0 "
+        f"-stop_threshold 0.99 "
     p = await asyncio.create_subprocess_shell(
         f"python -u {opt.nlm_dir}/train.py "
         f"-data {lang} "
         f"-gpuid {device_id} "
         f"-save_dir {lang_align_dir} "
-        f"-stop_threshold 0.99 "
         f"-batch_size 64 "
         f"-epoch_size 20 "
         f"-opt_type SGD "
-        f"-learning_rate 1.0 "
         f"-n_layer 2 "
         f"-emb_size 300 "
         f"-h_size 300 "
         f"-seed 111 "
         f"-dr_rate 0.3 "
         f"-remove_models "
+        f"{opts_cmd_str}"
         f">> {align_log_file} 2>&1 "
     )
     await p.wait()
@@ -247,7 +256,7 @@ async def main():
     task_functions = {"fb": align_emb_fb, "nlm": align_emb_nlm, "vecmap": align_emb_vecmap}
     task_function = task_functions.get(opt.algorithm)
     if task_function == None:
-        print("oh noes")
+        print("Could not retrieve task function")
         return
     align_tasks = [asyncio.create_task(task_function(lang, device_set, opt)) for lang in opt.langs]
     await asyncio.gather(*align_tasks)

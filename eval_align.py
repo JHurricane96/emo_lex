@@ -8,7 +8,6 @@
 
 import io
 import cupy as np
-import fasttext
 import argparse
 from eval_utils import *
 
@@ -46,7 +45,6 @@ if params.nomatch:
 
 words_tgt, x_tgt = load_vectors(params.tgt_emb, maxload=params.maxload, center=params.center)
 words_src, x_src = load_vectors(params.src_emb, maxload=params.maxload, center=params.center)
-# model_src = fasttext.load_model(params.src_emb)
 
 if params.tgt_mat != "":
     R_tgt = load_transform(params.tgt_mat)
@@ -56,7 +54,6 @@ if params.src_mat != "":
     x_src = np.dot(x_src, R_src)
 
 src2tgt, lexicon_size = load_lexicon(params.dico_test, words_src, words_tgt)
-# src2tgt, lexicon_size, x_src, words_src = load_lexicon_with_unseen_words(params.dico_test, model_src, words_tgt)
 
 # bsz = len(x_tgt)
 bsz = 1024
